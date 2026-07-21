@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shift Availability Board</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+#app, #app * { box-sizing: border-box; }
+#app {
+  --bg: #F5F6F2;
+  --surface: #FFFFFF;
+  --ink: #1C2321;
+  --ink-soft: #5B6560;
+  --liquor: #7B2942;
+  --liquor-soft: #F5E7EA;
+  --grocery: #2F6B4F;
+  --grocery-soft: #E8F1EC;
+  --amber: #D98E2F;
+  --amber-soft: #FBF0DE;
+  --border: #E2E1DA;
+  --danger: #B3432B;
+  --danger-soft: #F8E7E2;
+
+  font-family: 'Inter', system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  min-height: 100vh;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app h1, #app h2, #app h3, .display {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.shell { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; }
+
+/* ---- Board header (signature element) ---- */
+.board {
+  background: var(--ink);
+  color: #F5F6F2;
+  border-radius: 14px;
+  padding: 22px 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+.board-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size: 26px; letter-spacing:0.02em; text-transform:uppercase; }
+.board-sub { font-family:'Inter',sans-serif; font-size:12.5px; color:#C7CCC4; text-transform:none; letter-spacing:0; margin-top:2px; }
+.status-pill { display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.18); padding:8px 14px; border-radius:999px; font-family:'Barlow Condensed',sans-serif; font-weight:700; letter-spacing:0.08em; font-size:13px; text-transform:uppercase; }
+.dot { width:9px; height:9px; border-radius:50%; }
+.dot.open { background:#4CAF6D; box-shadow:0 0 0 0 rgba(76,175,109,0.6); animation: pulse 1.8s infinite; }
+.dot.closed { background:#C7573F; }
+@keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(76,175,109,0.55);} 70%{box-shadow:0 0 0 8px rgba(76,175,109,0);} 100%{box-shadow:0 0 0 0 rgba(76,175,109,0);} }
+
+/* ---- Cards / surfaces ---- */
+.card { background: var(--surface); border:1px solid var(--border); border-radius:12px; padding:22px; margin-bottom:18px; }
+.card-tight { padding:16px 18px; }
+
+.muted { color: var(--ink-soft); font-size:13.5px; }
+.small { font-size:12.5px; }
+
+/* ---- Buttons / inputs ---- */
+.btn { font-family:'Inter',sans-serif; font-weight:600; font-size:14px; padding:10px 18px; border-radius:8px; border:1px solid var(--ink); background:var(--ink); color:#fff; cursor:pointer; transition:opacity .15s ease; }
+.btn:hover { opacity:0.85; }
+.btn.secondary { background:transparent; color:var(--ink); border:1px solid var(--border); }
+.btn.secondary:hover { border-color: var(--ink); opacity:1; }
+.btn.danger { background:var(--danger); border-color:var(--danger); }
+.btn.amber { background:var(--amber); border-color:var(--amber); color:#2b1c04; }
+.btn:disabled { opacity:0.45; cursor:not-allowed; }
+.btn-row { display:flex; gap:10px; flex-wrap:wrap; }
+
+input[type=text], input[type=password], select {
+  font-family:'Inter',sans-serif; font-size:14px; padding:10px 12px; border-radius:8px;
+  border:1px solid var(--border); background:#fff; color:var(--ink); width:100%;
+}
+input:focus, select:focus { outline:2px solid var(--ink); outline-offset:1px; }
+label { font-size:12.5px; font-weight:600; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.04em; display:block; margin-bottom:6px; }
+.field { margin-bottom:14px; }
+
+/* ---- Landing ---- */
+.landing-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:640px){ .landing-grid{ grid-template-columns:1fr; } }
+.role-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:26px; cursor:pointer; text-align:left; transition: border-color .15s ease, transform .1s ease; }
+.role-card:hover { border-color: var(--ink); transform: translateY(-2px); }
+.role-card .display { font-size:22px; margin-bottom:6px; }
+
+/* ---- Department tag ---- */
+.tag { display:inline-flex; align-items:center; gap:6px; font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase; padding:4px 10px; border-radius:999px; }
+.tag.liquor { background:var(--liquor-soft); color:var(--liquor); }
+.tag.grocery { background:var(--grocery-soft); color:var(--grocery); }
+.tag.other { background:var(--amber-soft); color:#8a5a10; }
+.tag.location { background:#E7ECF3; color:#33507A; }
+
+/* ---- Day grid (staff form) ---- */
+.day-row { border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:10px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+.day-name { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:18px; width:130px; flex-shrink:0; }
+.day-date { display:block; font-family:'Inter',sans-serif; font-size:11.5px; color:var(--ink-soft); text-transform:none; letter-spacing:0; font-weight:500; }
+.toggle-wrap { display:flex; gap:6px; }
+.toggle-btn { padding:7px 14px; border-radius:7px; border:1px solid var(--border); background:#fff; font-size:13px; font-weight:600; cursor:pointer; }
+.toggle-btn.active-avail { background:var(--grocery); border-color:var(--grocery); color:#fff; }
+.toggle-btn.active-unavail { background:var(--danger); border-color:var(--danger); color:#fff; }
+.time-selects { display:flex; align-items:center; gap:8px; }
+.time-selects select { width:auto; min-width:110px; }
+
+/* ---- Table ---- */
+table { width:100%; border-collapse:collapse; font-size:13.5px; }
+th { text-align:left; font-family:'Barlow Condensed',sans-serif; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; font-size:12px; color:var(--ink-soft); padding:8px 10px; border-bottom:2px solid var(--ink); white-space:nowrap; }
+td { padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:middle; }
+tr:last-child td { border-bottom:none; }
+.icon-btn { background:none; border:none; cursor:pointer; color:var(--ink-soft); font-size:13px; font-weight:600; padding:4px 8px; border-radius:6px; }
+.icon-btn:hover { background:var(--bg); color:var(--ink); }
+
+/* ---- Tabs ---- */
+.tabs { display:flex; gap:6px; margin-bottom:20px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+.tab { padding:10px 16px; font-family:'Barlow Condensed',sans-serif; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; font-size:14px; cursor:pointer; color:var(--ink-soft); border-bottom:2px solid transparent; margin-bottom:-1px; }
+.tab.active { color:var(--ink); border-bottom-color:var(--amber); }
+
+.top-row { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+.code-badge { font-family:'Barlow Condensed',sans-serif; font-weight:700; letter-spacing:0.08em; background:var(--bg); border:1px dashed var(--ink-soft); padding:6px 10px; border-radius:6px; font-size:14px; }
+.empty { text-align:center; padding:40px 20px; color:var(--ink-soft); }
+.banner { padding:12px 16px; border-radius:8px; font-size:13.5px; margin-bottom:16px; }
+.banner.amber { background:var(--amber-soft); color:#8a5a10; border:1px solid #EAC17C; }
+.banner.danger { background:var(--danger-soft); color:var(--danger); border:1px solid #E2AFA0; }
+.banner.grocery { background:var(--grocery-soft); color:var(--grocery); border:1px solid #B7D8C4; }
+.link-btn { background:none; border:none; color:var(--ink-soft); text-decoration:underline; cursor:pointer; font-size:13px; padding:0; }
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+(function(){
+
+/* ============================= STATE ============================= */
+var S = {
+  screen: 'landing',       // landing | staff-login | staff-form | admin-login | admin
+  staff: null,             // logged in staff object
+  adminTab: 'availability',
+  loading: true,
+  error: '',
+  cache: { staffList: [], departments: [], locations: [], adminPassword: null },
+  draft: null,             // working copy of this week's availability while editing
+  adminWeek: null,         // ISO date string of week being viewed in admin
+  weekKeysCache: []
+};
+
+/* ============================= HELPERS ============================= */
+var API_URL = '/api/roster'; // Vercel serverless function
+
+function pad(n){ return n<10 ? '0'+n : ''+n; }
+function isoDate(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
+function fmtDateShort(d){ return d.toLocaleDateString('en-AU',{weekday:'short', day:'numeric', month:'short'}); }
+function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
+
+// Weeks start Monday. Window opens Sunday, closes Thursday night, recurring weekly.
+// The target week (the one staff are filling in) stays fixed for the whole
+// Sun-Thu window and through the Fri/Sat after it closes - matches api.php exactly.
+function referenceThursday(){
+  var t=new Date(); t.setHours(0,0,0,0);
+  var jsDay=t.getDay(); // Sun=0..Sat=6
+  if(jsDay<=4){ return addDays(t, 4-jsDay); }
+  return addDays(t, -(jsDay-4));
+}
+function targetWeekStart(){ return addDays(referenceThursday(), 4); } // Thu -> Mon
+function isWindowOpen(){ var day=new Date().getDay(); return day>=0 && day<=4; } // Sun..Thu (fallback only)
+function effectiveWindowOpen(){ return (S.serverWindowOpen !== undefined && S.serverWindowOpen !== null) ? S.serverWindowOpen : isWindowOpen(); }
+function dayNames(){ return ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']; }
+function shortDept(d){ return d; }
+function genId(){ return 'st_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+function timeSlots(){
+  var out=[]; var h=7, m=30;
+  while(h<21 || (h===21 && m===0)){
+    var val = pad(h)+':'+pad(m);
+    var hour12 = h%12===0?12:h%12;
+    var ampm = h<12?'AM':'PM';
+    out.push({value: val, label: hour12+':'+pad(m)+' '+ampm});
+    m += 30;
+    if(m>=60){ m=0; h+=1; }
+  }
+  return out;
+}
+var SLOTS = timeSlots();
+
+function emptyDay(){ return { available:false, start:'09:00', end:'17:00' }; }
+function emptyWeekAvailability(){
+  var days={};
+  dayNames().forEach(function(dn){ days[dn]=emptyDay(); });
+  return days;
+}
+
+function deptTagClass(dept){
+  if(!dept) return 'other';
+  var d = dept.toLowerCase();
+  if(d==='liquor') return 'liquor';
+  if(d==='grocery') return 'grocery';
+  return 'other';
+}
+function staffDepts(s){
+  if(Array.isArray(s.departments)) return s.departments;
+  if(s.department) return [s.department]; // back-compat with older single-department records
+  return [];
+}
+function renderDeptTags(depts){
+  if(!depts || depts.length===0) return '<span class="tag other">No department</span>';
+  return depts.map(function(d){ return '<span class="tag '+deptTagClass(d)+'">'+d+'</span>'; }).join(' ');
+}
+function renderLocationTag(loc){
+  if(!loc) return '<span class="tag location">No location</span>';
+  return '<span class="tag location">'+loc+'</span>';
+}
+
+/* ============================= API (PHP + MySQL backend) ============================= */
+async function apiCall(action, payload){
+  var res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(Object.assign({action: action}, payload || {}))
+  });
+  var data;
+  try { data = await res.json(); }
+  catch(e){ throw new Error('Server returned an unexpected response. Check that api.php and config.php are set up correctly.'); }
+  if(!data.success){ throw new Error(data.error || 'Request failed.'); }
+  return data;
+}
+
+async function loadCore(){
+  try {
+    var res = await apiCall('init', {});
+    S.cache.departments = res.departments;
+    S.cache.locations = res.locations;
+    S.serverWindowOpen = res.windowOpen;
+    S.serverTargetWeek = res.targetWeekStart;
+    S.windowOverride = res.windowOverride;
+  } catch(e){
+    S.cache.departments = ['Liquor','Grocery'];
+    S.cache.locations = ['Karabar','Kaleen'];
+    S.loadError = e.message;
+  }
+  S.loading = false;
+}
+
+async function saveLocations(name, adding){
+  if(adding) await apiCall('add_location', {name: name});
+  else await apiCall('remove_location', {name: name});
+  var res = await apiCall('init', {});
+  S.cache.departments = res.departments;
+  S.cache.locations = res.locations;
+}
+
+async function saveDepartments(name, adding){
+  if(adding) await apiCall('add_department', {name: name});
+  else await apiCall('remove_department', {name: name});
+  var res = await apiCall('init', {});
+  S.cache.departments = res.departments;
+}
+
+async function refreshStaffList(){
+  var res = await apiCall('get_staff_list', {});
+  S.cache.staffList = res.staff;
+}
+
+async function saveAdminPassword(pw){
+  await apiCall('change_admin_password', {newPassword: pw});
+}
+
+async function getWeekData(iso){
+  try {
+    var res = await apiCall('get_availability', {weekStart: iso});
+    var byId = {};
+    res.data.forEach(function(rec){
+      byId[String(rec.staffId)] = { submittedAt: rec.submittedAt, days: rec.days, name: rec.name, departments: rec.departments };
+    });
+    return byId;
+  } catch(e){ return {}; }
+}
+
+async function listWeekKeys(){
+  try {
+    var res = await apiCall('list_weeks', {});
+    return res.weeks;
+  } catch(e){ return []; }
+}
+
+/* ============================= RENDER ROOT ============================= */
+function render(){
+  var el = document.getElementById('app');
+  if(!el) return;
+  if(S.loading){ el.innerHTML = renderLoading(); return; }
+  var html = '';
+  switch(S.screen){
+    case 'landing': html = renderLanding(); break;
+    case 'staff-login': html = renderStaffLogin(); break;
+    case 'staff-form': html = renderStaffForm(); break;
+    case 'admin-login': html = renderAdminLogin(); break;
+    case 'admin': html = renderAdmin(); break;
+    default: html = renderLanding();
+  }
+  el.innerHTML = html;
+  afterRender();
+}
+
+function renderLoading(){
+  return '<div class="shell"><div class="card empty">Loading roster board…</div></div>';
+}
+
+function renderHeader(subtitle, rightHtml){
+  var open = effectiveWindowOpen();
+  return '' +
+  '<div class="board">' +
+    '<div>' +
+      '<div class="board-title">Shift Availability Board</div>' +
+      '<div class="board-sub">'+ (subtitle||'Liquor &amp; Grocery scheduling') +'</div>' +
+    '</div>' +
+    (rightHtml || ('<div class="status-pill"><span class="dot '+(open?'open':'closed')+'"></span>Window '+(open?'Open':'Closed')+'</div>')) +
+  '</div>';
+}
+
+/* ============================= LANDING ============================= */
+function renderLanding(){
+  return '' +
+  '<div class="shell">' +
+    renderHeader('Fill in your availability for next week\u2019s roster') +
+    (S.error ? '<div class="banner danger">'+S.error+'</div>' : '') +
+    '<div class="landing-grid">' +
+      '<div class="role-card" onclick="go(\'staff-login\')">' +
+        '<div class="display">I\u2019m Staff</div>' +
+        '<div class="muted">Enter your secure code to fill in your availability.</div>' +
+      '</div>' +
+      '<div class="role-card" onclick="go(\'admin-login\')">' +
+        '<div class="display">I\u2019m Admin</div>' +
+        '<div class="muted">Manage staff, departments and download the roster sheet.</div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+/* ============================= STAFF LOGIN ============================= */
+function renderStaffLogin(){
+  return '' +
+  '<div class="shell">' +
+    renderHeader('Staff login') +
+    '<div class="card" style="max-width:420px;margin:0 auto;">' +
+      '<h3 style="margin:0 0 14px;">Enter Your Code</h3>' +
+      (S.error ? '<div class="banner danger">'+S.error+'</div>' : '') +
+      '<div class="field">' +
+        '<label>Secure Code</label>' +
+        '<input type="text" id="staffCodeInput" placeholder="e.g. 7QX2KP" autocomplete="off" />' +
+      '</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn" onclick="staffLogin()">Continue</button>' +
+        '<button class="btn secondary" onclick="go(\'landing\')">Back</button>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+async function staffLogin(){
+  var input = document.getElementById('staffCodeInput');
+  var code = (input.value||'').trim().toUpperCase();
+  if(!code){ S.error='Please enter your code.'; render(); return; }
+  var match;
+  try {
+    var res = await apiCall('staff_login', {code: code});
+    match = res.staff;
+  } catch(e){ S.error = e.message; render(); return; }
+  S.error='';
+  S.staff = match;
+  await loadCore(); // refresh window status in case admin just toggled it
+  var iso = isoDate(targetWeekStart());
+  var existingDays = {};
+  try {
+    var dres = await apiCall('get_my_availability', {staffId: match.id, weekStart: iso});
+    existingDays = dres.days;
+  } catch(e){ /* no submission yet, or fetch failed - start blank */ }
+  S.draft = (existingDays && Object.keys(existingDays).length>0) ? Object.assign(emptyWeekAvailability(), existingDays) : emptyWeekAvailability();
+  S.screen = 'staff-form';
+  render();
+}
+
+/* ============================= STAFF FORM ============================= */
+function renderStaffForm(){
+  var open = effectiveWindowOpen();
+  var wk = targetWeekStart();
+  var staff = S.staff;
+  var depts = staffDepts(staff);
+
+  var rows = dayNames().map(function(dn, idx){
+    var d = S.draft[dn];
+    var dateLabel = fmtDateShort(addDays(wk, idx));
+    var isAvail = d.available;
+    return '' +
+    '<div class="day-row">' +
+      '<div class="day-name">'+dn+'<span class="day-date">'+dateLabel+'</span></div>' +
+      '<div class="toggle-wrap">' +
+        '<button type="button" class="toggle-btn '+(isAvail?'active-avail':'')+'" '+(open?'':'disabled')+' onclick="setDayAvail(\''+dn+'\', true)">Available</button>' +
+        '<button type="button" class="toggle-btn '+(!isAvail?'active-unavail':'')+'" '+(open?'':'disabled')+' onclick="setDayAvail(\''+dn+'\', false)">Unavailable</button>' +
+      '</div>' +
+      (isAvail ? (
+        '<div class="time-selects">' +
+          '<select '+(open?'':'disabled')+' onchange="setDayTime(\''+dn+'\',\'start\',this.value)">' + renderTimeOptions(d.start) + '</select>' +
+          '<span class="muted">to</span>' +
+          '<select '+(open?'':'disabled')+' onchange="setDayTime(\''+dn+'\',\'end\',this.value)">' + renderTimeOptions(d.end) + '</select>' +
+        '</div>'
+      ) : '<div class="muted small">Not available this day</div>') +
+    '</div>';
+  }).join('');
+
+  return '' +
+  '<div class="shell">' +
+    renderHeader('Fill your availability') +
+    '<div class="top-row">' +
+      '<div>' +
+        '<h2 style="margin:0;font-size:22px;">'+staff.name+'</h2>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">'+renderLocationTag(staff.location)+' '+renderDeptTags(depts)+'</div>' +
+      '</div>' +
+      '<button class="link-btn" onclick="logoutStaff()">Log out</button>' +
+    '</div>' +
+    (!open ? '<div class="banner danger">The availability window is closed'+(S.windowOverride==='closed'?' (closed by admin)':'')+'. It normally reopens Sunday 12:00am and closes Thursday 11:59pm. You can still view what you last submitted below.</div>'
+           : '<div class="banner amber">'+(S.windowOverride==='open'?'<strong>Window manually opened by admin.</strong> ':'')+'Store hours are 7:30am \u2013 9:00pm. Set your availability for the week of <strong>'+fmtDateShort(wk)+'</strong>. Submissions lock after Thursday'+(S.windowOverride==='open'?' unless admin closes this early':'')+'.</div>') +
+    '<div class="card">' + rows + '</div>' +
+    (open ? '<div class="btn-row"><button class="btn amber" onclick="submitAvailability()">Save Availability</button></div>' : '') +
+    (S.savedMsg ? '<div class="banner grocery">'+S.savedMsg+'</div>' : '') +
+    (S.error ? '<div class="banner danger">'+S.error+'</div>' : '') +
+  '</div>';
+}
+
+function renderTimeOptions(selected){
+  return SLOTS.map(function(s){
+    return '<option value="'+s.value+'" '+(s.value===selected?'selected':'')+'>'+s.label+'</option>';
+  }).join('');
+}
+
+function setDayAvail(dn, val){
+  S.draft[dn].available = val;
+  render();
+}
+function setDayTime(dn, field, val){
+  S.draft[dn][field] = val;
+}
+
+async function submitAvailability(){
+  var iso = isoDate(targetWeekStart());
+  try {
+    await apiCall('set_availability', { staffId: S.staff.id, weekStart: iso, days: S.draft });
+    S.savedMsg = 'Saved. You can update this any time before the window closes Thursday.';
+    S.error = '';
+  } catch(e){
+    S.error = e.message; // e.g. deadline just passed server-side
+    S.savedMsg = '';
+  }
+  render();
+  setTimeout(function(){ S.savedMsg=''; render(); }, 4000);
+}
+
+function logoutStaff(){
+  S.staff=null; S.draft=null; S.error=''; S.savedMsg='';
+  S.screen='landing';
+  render();
+}
+
+/* ============================= ADMIN LOGIN ============================= */
+function renderAdminLogin(){
+  return '' +
+  '<div class="shell">' +
+    renderHeader('Admin login') +
+    '<div class="card" style="max-width:420px;margin:0 auto;">' +
+      '<h3 style="margin:0 0 14px;">Admin Access</h3>' +
+      (S.error ? '<div class="banner danger">'+S.error+'</div>' : '') +
+      '<div class="field">' +
+        '<label>Password</label>' +
+        '<input type="password" id="adminPwInput" autocomplete="off" />' +
+      '</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn" onclick="adminLogin()">Continue</button>' +
+        '<button class="btn secondary" onclick="go(\'landing\')">Back</button>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+async function adminLogin(){
+  var pw = document.getElementById('adminPwInput').value || '';
+  try {
+    await apiCall('admin_login', {password: pw});
+  } catch(e){ S.error = e.message; render(); return; }
+  S.error='';
+  S.screen='admin';
+  S.adminWeek = isoDate(targetWeekStart());
+  resetIdleTimer();
+  render();
+  try { await refreshStaffList(); render(); } catch(e){}
+}
+
+/* ============================= ADMIN DASHBOARD ============================= */
+function renderAdmin(){
+  var tabs = ['availability','staff','departments','locations','settings'];
+  var labels = {availability:'Availability', staff:'Staff', departments:'Departments', locations:'Locations', settings:'Settings'};
+  var tabsHtml = tabs.map(function(t){
+    return '<div class="tab '+(S.adminTab===t?'active':'')+'" onclick="setAdminTab(\''+t+'\')">'+labels[t]+'</div>';
+  }).join('');
+
+  var body = '';
+  if(S.adminTab==='availability') body = renderAdminAvailability();
+  else if(S.adminTab==='staff') body = renderAdminStaff();
+  else if(S.adminTab==='departments') body = renderAdminDepartments();
+  else if(S.adminTab==='locations') body = renderAdminLocations();
+  else if(S.adminTab==='settings') body = renderAdminSettings();
+
+  return '' +
+  '<div class="shell">' +
+    renderHeader('Admin dashboard', '<button class="btn secondary" onclick="logoutAdmin()" style="background:transparent;color:#fff;border-color:rgba(255,255,255,0.3);">Log out</button>') +
+    '<div class="tabs">'+tabsHtml+'</div>' +
+    body +
+  '</div>';
+}
+
+function setAdminTab(t){
+  S.adminTab=t; S.pendingAction=null; render();
+  if(t==='staff'){ loadStaffTab(); }
+  else if(t==='availability'){ loadAdminWeekIfNeeded(); }
+}
+function logoutAdmin(){ apiCall('admin_logout', {}).catch(function(){}); S.screen='landing'; S.error=''; clearIdleTimer(); render(); }
+
+/* ---- Staff tab loading (with visible errors + manual reload) ---- */
+function loadStaffTab(){
+  S.staffLoading = true; S.staffLoadError = '';
+  render();
+  refreshStaffList().then(function(){
+    S.staffLoading = false;
+    render();
+  }).catch(function(e){
+    S.staffLoading = false;
+    S.staffLoadError = e.message;
+    render();
+  });
+}
+
+/* ---- Availability tab ---- */
+var adminWeekCache = {}; // iso -> weekData
+function loadAdminWeekIfNeeded(){
+  if(S.adminTab!=='availability') return;
+  var needsStaff = !S.cache.staffList || S.cache.staffList.length===0;
+  var needsWeekList = !S.weekOptions;
+  var iso = S.adminWeek;
+  var needsWeekData = iso && adminWeekCache[iso]===undefined;
+  if(!needsStaff && !needsWeekList && !needsWeekData) return;
+
+  var chain = Promise.resolve();
+  if(needsStaff){
+    chain = chain.then(function(){ return refreshStaffList(); }).catch(function(){});
+  }
+  if(needsWeekList){
+    chain = chain.then(function(){ return listWeekKeys(); }).then(function(weeks){
+      S.weekOptions = weeks;
+      if(!S.adminWeek){ S.adminWeek = weeks[0] || isoDate(targetWeekStart()); }
+    });
+  }
+  chain.then(function(){
+    var i = S.adminWeek;
+    if(adminWeekCache[i]!==undefined) { render(); return; }
+    return getWeekData(i).then(function(data){
+      adminWeekCache[i] = data;
+      render();
+    });
+  });
+  render(); // show loading state immediately
+}
+
+function reloadAvailability(){
+  adminWeekCache = {};
+  S.weekOptions = null;
+  S.cache.staffList = [];
+  loadAdminWeekIfNeeded();
+}
+
+function renderAdminAvailability(){
+  var iso = S.adminWeek || isoDate(targetWeekStart());
+  var wk = new Date(iso+'T00:00:00');
+  var data = adminWeekCache[iso];
+
+  if(!S.weekOptions || data===undefined){
+    loadAdminWeekIfNeeded();
+    return '<div class="card empty">Loading week…</div>';
+  }
+
+  var staffList = S.cache.staffList;
+  var deptFilter = S.deptFilter || 'all';
+  var locFilter = S.locFilter || 'all';
+  var filtered = staffList.filter(function(s){
+    var deptOk = deptFilter==='all' || staffDepts(s).indexOf(deptFilter)!==-1;
+    var locOk = locFilter==='all' || s.location===locFilter;
+    return deptOk && locOk;
+  });
+
+  var weekOptions = S.weekOptions.map(function(o){
+    var d = new Date(o+'T00:00:00');
+    return '<option value="'+o+'" '+(o===iso?'selected':'')+'>Week of '+fmtDateShort(d)+'</option>';
+  }).join('');
+
+  var rowsHtml = filtered.map(function(s){
+    var rec = data[String(s.id)];
+    var cells = dayNames().map(function(dn){
+      if(!rec) return '<td class="muted">\u2014</td>';
+      var d = rec.days[dn];
+      if(!d || !d.available) return '<td class="muted">Off</td>';
+      return '<td>'+labelFromValue(d.start)+'\u2013'+labelFromValue(d.end)+'</td>';
+    }).join('');
+    return '<tr><td>'+s.name+'</td><td>'+renderLocationTag(s.location)+'</td><td>'+renderDeptTags(staffDepts(s))+'</td>'+cells+'<td>'+(rec?'<span style="color:var(--grocery);font-weight:600;">Submitted</span>':'<span class="muted">Pending</span>')+'</td></tr>';
+  }).join('');
+
+  if(filtered.length===0){
+    rowsHtml = '<tr><td colspan="11" class="empty">No staff match this filter yet.</td></tr>';
+  }
+
+  var deptOptions = ['all'].concat(S.cache.departments).map(function(d){
+    return '<option value="'+d+'" '+(deptFilter===d?'selected':'')+'>'+(d==='all'?'All Departments':d)+'</option>';
+  }).join('');
+  var locOptions = ['all'].concat(S.cache.locations||[]).map(function(l){
+    return '<option value="'+l+'" '+(locFilter===l?'selected':'')+'>'+(l==='all'?'All Locations':l)+'</option>';
+  }).join('');
+
+  return '' +
+  '<div class="banner amber small">Only the two most recent weeks of availability are kept in the database \u2014 older weeks are cleared out automatically.</div>' +
+  '<div class="top-row">' +
+    '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+      '<div><label style="margin-bottom:4px;">Week</label><select onchange="changeAdminWeek(this.value)">'+weekOptions+'</select></div>' +
+      '<div><label style="margin-bottom:4px;">Location</label><select onchange="setLocFilter(this.value)">'+locOptions+'</select></div>' +
+      '<div><label style="margin-bottom:4px;">Department</label><select onchange="setDeptFilter(this.value)">'+deptOptions+'</select></div>' +
+      '<button class="btn secondary" onclick="reloadAvailability()" style="height:41px;">Reload</button>' +
+    '</div>' +
+    '<button class="btn amber" onclick="downloadExcel()">Download Excel</button>' +
+  '</div>' +
+  '<div class="card" style="overflow-x:auto;">' +
+    '<div class="muted small" style="margin-bottom:10px;">Week of '+fmtDateShort(wk)+'</div>' +
+    '<table><thead><tr><th>Name</th><th>Location</th><th>Dept</th>' + dayNames().map(function(d){return '<th>'+d.slice(0,3)+'</th>';}).join('') + '<th>Status</th></tr></thead>' +
+    '<tbody>'+rowsHtml+'</tbody></table>' +
+  '</div>';
+}
+
+function labelFromValue(v){
+  var f = SLOTS.find(function(s){ return s.value===v; });
+  return f ? f.label : v;
+}
+
+function changeAdminWeek(iso){ S.adminWeek = iso; render(); loadAdminWeekIfNeeded(); }
+function setDeptFilter(v){ S.deptFilter = v; render(); }
+function setLocFilter(v){ S.locFilter = v; render(); }
+
+function downloadExcel(){
+  var iso = S.adminWeek || isoDate(targetWeekStart());
+  var data = adminWeekCache[iso] || {};
+  var wk = new Date(iso+'T00:00:00');
+  var deptFilter = S.deptFilter || 'all';
+  var locFilter = S.locFilter || 'all';
+  var staffList = S.cache.staffList.filter(function(s){
+    var deptOk = deptFilter==='all' || staffDepts(s).indexOf(deptFilter)!==-1;
+    var locOk = locFilter==='all' || s.location===locFilter;
+    return deptOk && locOk;
+  });
+
+  var rows = [];
+  rows.push(['Name','Location','Department'].concat(dayNames().map(function(dn,idx){ return dn+' ('+fmtDateShort(addDays(wk,idx))+')'; })).concat(['Status']));
+
+  staffList.forEach(function(s){
+    var rec = data[String(s.id)];
+    var row = [s.name, s.location||'', staffDepts(s).join(', ')];
+    dayNames().forEach(function(dn){
+      if(!rec){ row.push('No response'); return; }
+      var d = rec.days[dn];
+      if(!d || !d.available){ row.push('Unavailable'); }
+      else { row.push(labelFromValue(d.start)+' - '+labelFromValue(d.end)); }
+    });
+    row.push(rec ? 'Submitted' : 'Pending');
+    rows.push(row);
+  });
+
+  var wb = XLSX.utils.book_new();
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:20},{wch:12},{wch:16}].concat(dayNames().map(function(){return {wch:18};})).concat([{wch:12}]);
+  var sheetLabel = (locFilter!=='all' ? locFilter+' - ' : '') + 'Week of ' + iso;
+  XLSX.utils.book_append_sheet(wb, ws, sheetLabel.substring(0,31));
+  XLSX.writeFile(wb, 'availability-' + (locFilter!=='all'?locFilter+'-':'') + iso + '.xlsx');
+}
+
+/* ---- Staff tab ---- */
+function renderAdminStaff(){
+  if(S.staffLoading){
+    return '<div class="card empty">Loading staff…</div>';
+  }
+  if(S.staffLoadError){
+    return '<div class="card"><div class="banner danger">Couldn\u2019t load staff: '+S.staffLoadError+'</div><button class="btn secondary" onclick="loadStaffTab()">Try Again</button></div>';
+  }
+
+  var list = S.cache.staffList || [];
+  var rows = list.map(function(s){
+    return '' +
+    '<tr>' +
+      '<td>'+s.name+'</td>' +
+      '<td>'+renderLocationTag(s.location)+'</td>' +
+      '<td>'+renderDeptTags(staffDepts(s))+'</td>' +
+      '<td><span class="code-badge">'+s.code+'</span></td>' +
+      '<td><button class="icon-btn" onclick="removeStaff(\''+s.id+'\')">Remove</button></td>' +
+    '</tr>';
+  }).join('');
+  if(list.length===0) rows = '<tr><td colspan="5" class="empty">No staff added yet.</td></tr>';
+
+  var deptCheckboxes = S.cache.departments.map(function(d){
+    return '<label style="display:flex;align-items:center;gap:6px;font-weight:500;text-transform:none;letter-spacing:0;font-size:13.5px;color:var(--ink);">' +
+      '<input type="checkbox" value="'+d+'" class="newStaffDeptBox" style="width:auto;" /> '+d +
+    '</label>';
+  }).join('');
+
+  var locOptions = '<option value="">Select location…</option>' + (S.cache.locations||[]).map(function(l){
+    return '<option value="'+l+'">'+l+'</option>';
+  }).join('');
+
+  return '' +
+  '<div class="card">' +
+    '<h3 style="margin-top:0;">Add Staff</h3>' +
+    '<div style="display:grid;grid-template-columns:1.6fr 1.2fr 1.6fr 1.4fr auto;gap:10px;align-items:end;">' +
+      '<div class="field" style="margin-bottom:0;"><label>Name</label><input type="text" id="newStaffName" placeholder="Full name" /></div>' +
+      '<div class="field" style="margin-bottom:0;"><label>Location</label><select id="newStaffLocation">'+locOptions+'</select></div>' +
+      '<div class="field" style="margin-bottom:0;"><label>Departments</label><div style="display:flex;gap:12px;flex-wrap:wrap;padding:10px 0;">'+deptCheckboxes+'</div></div>' +
+      '<div class="field" style="margin-bottom:0;"><label>Secure Code</label><input type="text" id="newStaffCode" placeholder="Leave blank to auto-generate" /></div>' +
+      '<button class="btn" style="height:41px;" onclick="addStaff()">Add Staff</button>' +
+    '</div>' +
+    '<div class="muted small" style="margin-top:8px;">Select one or more departments \u2014 staff who work across both Liquor and Grocery can be ticked for both.</div>' +
+  '</div>' +
+  '<div class="top-row"><div></div><button class="btn secondary" onclick="loadStaffTab()">Reload</button></div>' +
+  '<div class="card" style="overflow-x:auto;">' +
+    '<table><thead><tr><th>Name</th><th>Location</th><th>Department</th><th>Login Code</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>' +
+  '</div>';
+}
+
+async function addStaff(){
+  var name = (document.getElementById('newStaffName').value||'').trim();
+  var location = document.getElementById('newStaffLocation').value;
+  var checked = Array.prototype.slice.call(document.querySelectorAll('.newStaffDeptBox:checked'));
+  var depts = checked.map(function(cb){ return cb.value; });
+  var codeInput = (document.getElementById('newStaffCode').value||'').trim().toUpperCase();
+  if(!name){ alert('Please enter a name.'); return; }
+  if(!location){ alert('Please select a location.'); return; }
+  if(depts.length===0){ alert('Select at least one department.'); return; }
+  try {
+    await apiCall('add_staff', { name: name, departments: depts, location: location, code: codeInput });
+    await refreshStaffList();
+    render();
+  } catch(e){ alert(e.message); }
+}
+
+async function removeStaff(id){
+  if(!confirm('Remove this staff member? Their login code will stop working.')) return;
+  try {
+    await apiCall('remove_staff', { id: id });
+    await refreshStaffList();
+    render();
+  } catch(e){ alert(e.message); }
+}
+
+/* ---- Departments tab ---- */
+function renderAdminDepartments(){
+  var rows = S.cache.departments.map(function(d){
+    var dtag = deptTagClass(d);
+    var locked = (d==='Liquor'||d==='Grocery');
+    return '<tr><td><span class="tag '+dtag+'">'+d+'</span></td><td>'+(locked?'':'<button class="icon-btn" onclick="removeDept(\''+d+'\')">Remove</button>')+'</td></tr>';
+  }).join('');
+  return '' +
+  '<div class="card">' +
+    '<h3 style="margin-top:0;">Add Department</h3>' +
+    '<div style="display:flex;gap:10px;align-items:end;">' +
+      '<div class="field" style="margin-bottom:0;flex:1;"><label>Department name</label><input type="text" id="newDeptName" placeholder="e.g. Bakery" /></div>' +
+      '<button class="btn" style="height:41px;" onclick="addDept()">Add</button>' +
+    '</div>' +
+  '</div>' +
+  '<div class="card"><table><thead><tr><th>Department</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
+async function addDept(){
+  var name = (document.getElementById('newDeptName').value||'').trim();
+  if(!name){ return; }
+  if(S.cache.departments.some(function(d){ return d.toLowerCase()===name.toLowerCase(); })){ alert('That department already exists.'); return; }
+  try {
+    await saveDepartments(name, true);
+    render();
+  } catch(e){ alert(e.message); }
+}
+async function removeDept(name){
+  if(!confirm('Remove department "'+name+'"? Existing staff keep their assignment but it will no longer appear for new staff.')) return;
+  try {
+    await saveDepartments(name, false);
+    render();
+  } catch(e){ alert(e.message); }
+}
+
+/* ---- Locations tab ---- */
+function renderAdminLocations(){
+  var rows = (S.cache.locations||[]).map(function(l){
+    return '<tr><td>'+renderLocationTag(l)+'</td><td><button class="icon-btn" onclick="removeLoc(\''+l+'\')">Remove</button></td></tr>';
+  }).join('');
+  if(!S.cache.locations || S.cache.locations.length===0){ rows = '<tr><td colspan="2" class="empty">No locations yet.</td></tr>'; }
+  return '' +
+  '<div class="card">' +
+    '<h3 style="margin-top:0;">Add Location</h3>' +
+    '<div style="display:flex;gap:10px;align-items:end;">' +
+      '<div class="field" style="margin-bottom:0;flex:1;"><label>Location name</label><input type="text" id="newLocName" placeholder="e.g. Fyshwick" /></div>' +
+      '<button class="btn" style="height:41px;" onclick="addLoc()">Add</button>' +
+    '</div>' +
+  '</div>' +
+  '<div class="card"><table><thead><tr><th>Location</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
+async function addLoc(){
+  var name = (document.getElementById('newLocName').value||'').trim();
+  if(!name){ return; }
+  if((S.cache.locations||[]).some(function(l){ return l.toLowerCase()===name.toLowerCase(); })){ alert('That location already exists.'); return; }
+  try {
+    await saveLocations(name, true);
+    render();
+  } catch(e){ alert(e.message); }
+}
+async function removeLoc(name){
+  if(!confirm('Remove location "'+name+'"? Existing staff keep their assignment but it will no longer appear for new staff.')) return;
+  try {
+    await saveLocations(name, false);
+    render();
+  } catch(e){ alert(e.message); }
+}
+
+/* ---- Settings tab ---- */
+function renderAdminSettings(){
+  var override = S.windowOverride || 'auto';
+  var pending = (S.pendingWindowMode !== undefined && S.pendingWindowMode !== null) ? S.pendingWindowMode : override;
+  var effOpen = effectiveWindowOpen();
+  var modes = [
+    {v:'auto', label:'Automatic', desc:'Normal schedule \u2014 opens Sunday, closes Thursday night.'},
+    {v:'open', label:'Force Open', desc:'Staff can submit right now, regardless of the day.'},
+    {v:'closed', label:'Force Closed', desc:'Staff cannot submit, even during Sun\u2013Thu.'}
+  ];
+  var optionsHtml = modes.map(function(m){
+    return '' +
+    '<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;">' +
+      '<input type="radio" name="windowMode" value="'+m.v+'" '+(pending===m.v?'checked':'')+' style="width:auto;margin-top:3px;" onchange="setPendingWindowMode(\''+m.v+'\')" />' +
+      '<span><strong style="font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:0.03em;">'+m.label+'</strong><br><span class="muted small">'+m.desc+'</span></span>' +
+    '</label>';
+  }).join('');
+  var isDirty = pending !== override;
+
+  return '' +
+  '<div class="card" style="max-width:480px;">' +
+    '<div class="top-row" style="margin-bottom:6px;">' +
+      '<h3 style="margin:0;">Submission Window</h3>' +
+      '<span class="status-pill" style="background:'+(effOpen?'var(--grocery-soft)':'var(--danger-soft)')+';color:'+(effOpen?'var(--grocery)':'var(--danger)')+';border:none;"><span class="dot '+(effOpen?'open':'closed')+'"></span>'+(effOpen?'Open Now':'Closed Now')+'</span>' +
+    '</div>' +
+    (S.windowMsg ? '<div class="banner grocery">'+S.windowMsg+'</div>' : '') +
+    optionsHtml +
+    '<div class="btn-row" style="margin-top:14px;">' +
+      '<button class="btn amber" '+(isDirty?'':'disabled')+' onclick="saveWindowOverride()">Save</button>' +
+      (isDirty ? '<button class="btn secondary" onclick="setPendingWindowMode(\''+override+'\')">Cancel</button>' : '') +
+    '</div>' +
+  '</div>' +
+  '<div class="card" style="max-width:420px;">' +
+    '<h3 style="margin-top:0;">Change Admin Password</h3>' +
+    (S.settingsMsg ? '<div class="banner grocery">'+S.settingsMsg+'</div>' : '') +
+    '<div class="field"><label>New Password</label><input type="password" id="newAdminPw" /></div>' +
+    '<button class="btn" onclick="changeAdminPw()">Update Password</button>' +
+  '</div>';
+}
+function setPendingWindowMode(mode){ S.pendingWindowMode = mode; render(); }
+async function saveWindowOverride(){
+  var mode = S.pendingWindowMode;
+  try {
+    var res = await apiCall('set_window_override', {mode: mode});
+    S.windowOverride = res.windowOverride;
+    S.serverWindowOpen = res.windowOpen;
+    S.pendingWindowMode = null;
+    S.windowMsg = mode==='auto' ? 'Switched back to the automatic Sun\u2013Thu schedule.' : ('Window manually set to ' + (mode==='open'?'OPEN':'CLOSED') + '.');
+    render();
+    setTimeout(function(){ S.windowMsg=''; render(); }, 3000);
+  } catch(e){ alert(e.message); }
+}
+async function changeAdminPw(){
+  var pw = document.getElementById('newAdminPw').value || '';
+  if(pw.length<4){ alert('Use at least 4 characters.'); return; }
+  await saveAdminPassword(pw);
+  S.settingsMsg = 'Password updated.';
+  render();
+  setTimeout(function(){ S.settingsMsg=''; render(); }, 3000);
+}
+
+/* ============================= NAV ============================= */
+function go(screen){ S.screen=screen; S.error=''; render(); }
+
+/* ---- Idle timeout: log admin out after 15 minutes of inactivity ---- */
+var IDLE_LIMIT_MS = 15 * 60 * 1000;
+var idleTimer = null;
+function resetIdleTimer(){
+  if(S.screen !== 'admin') return;
+  if(idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(function(){
+    if(S.screen==='admin'){
+      apiCall('admin_logout', {}).catch(function(){});
+      S.screen = 'landing';
+      S.error = 'You were logged out after 15 minutes of inactivity.';
+      render();
+    }
+  }, IDLE_LIMIT_MS);
+}
+function clearIdleTimer(){ if(idleTimer){ clearTimeout(idleTimer); idleTimer=null; } }
+document.addEventListener('click', resetIdleTimer);
+document.addEventListener('keydown', resetIdleTimer);
+
+function afterRender(){
+  var codeInput = document.getElementById('staffCodeInput');
+  if(codeInput){ codeInput.addEventListener('keydown', function(e){ if(e.key==='Enter') staffLogin(); }); }
+  var pwInput = document.getElementById('adminPwInput');
+  if(pwInput){ pwInput.addEventListener('keydown', function(e){ if(e.key==='Enter') adminLogin(); }); }
+}
+
+/* expose functions used by inline handlers */
+window.go = go;
+window.staffLogin = staffLogin;
+window.adminLogin = adminLogin;
+window.logoutAdmin = logoutAdmin;
+window.logoutStaff = logoutStaff;
+window.setAdminTab = setAdminTab;
+window.setDayAvail = setDayAvail;
+window.setDayTime = setDayTime;
+window.submitAvailability = submitAvailability;
+window.addStaff = addStaff;
+window.removeStaff = removeStaff;
+window.addDept = addDept;
+window.removeDept = removeDept;
+window.addLoc = addLoc;
+window.removeLoc = removeLoc;
+window.changeAdminWeek = changeAdminWeek;
+window.setDeptFilter = setDeptFilter;
+window.setLocFilter = setLocFilter;
+window.downloadExcel = downloadExcel;
+window.changeAdminPw = changeAdminPw;
+window.setPendingWindowMode = setPendingWindowMode;
+window.saveWindowOverride = saveWindowOverride;
+window.loadStaffTab = loadStaffTab;
+window.reloadAvailability = reloadAvailability;
+
+/* ============================= INIT ============================= */
+loadCore().then(render);
+render();
+
+})();
+</script>
+</body>
+</html>
