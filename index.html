@@ -231,7 +231,7 @@ async function apiCall(action, payload){
   });
   var data;
   try { data = await res.json(); }
-  catch(e){ throw new Error('Server returned an unexpected response. Check that api.php and config.php are set up correctly.'); }
+  catch(e){ throw new Error('Server returned an unexpected response. Check the Vercel deployment logs and confirm the Neon database is connected.'); }
   if(!data.success){ throw new Error(data.error || 'Request failed.'); }
   return data;
 }
