@@ -121,7 +121,14 @@ module.exports = async function handler(req, res) {
   }
 
   const pool = getPool();
-  const client = await pool.connect();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Database connection failed: ' + e.message });
+    return;
+  }
+
   try {
     const body = req.body || {};
     const action = body.action;
