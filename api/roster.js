@@ -27,6 +27,11 @@ function referenceThursday() {
   return addDays(t, -(jsDay - 4));
 }
 function targetWeekStart() { return isoDate(addDays(referenceThursday(), 4)); } // Thu -> Mon
+function currentWeekMonday() {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const offset = (t.getDay() + 6) % 7; // Mon=0..Sun=6
+  return isoDate(addDays(t, -offset));
+}
 
 function computeOpenFromOverride(override) {
   if (override === 'open') return true;
@@ -583,9 +588,12 @@ module.exports = async function handler(req, res) {
           [weekStart]
         );
 
-        // Retention: keep only the 2 most recently published roster weeks.
-        const keepRes = await client.query('SELECT week_start::text AS week_start FROM roster_meta WHERE published=TRUE ORDER BY week_start DESC LIMIT 2');
-        const keep = keepRes.rows.map(r => r.week_start);
+        // Retention: keep exactly the two weeks staff can actually see -
+        // the currently running week and next week - regardless of the
+        // order they were published in. (Publishing next week's roster
+        // early, while this week is still running, must not wipe out
+        // this week's still-relevant published shifts.)
+        const keep = Array.from(new Set([currentWeekMonday(), targetWeekStart(), weekStart]));
         if (keep.length > 0) {
           const placeholders = keep.map((_, i) => `$${i + 1}::date`).join(',');
           await client.query(`DELETE FROM roster_shifts WHERE week_start NOT IN (${placeholders})`, keep);
