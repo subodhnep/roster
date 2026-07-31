@@ -84,6 +84,36 @@ function splitDepts(s) {
 }
 const DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
+async function writeAvailabilityRows(client, staffId, weekStart, days) {
+  for (const [dayName, d] of Object.entries(days)) {
+    const available = !!(d && d.available);
+    const start = available ? (d.start || null) : null;
+    const end = available ? (d.end || null) : null;
+    await client.query(
+      `INSERT INTO availability (staff_id, week_start, day, available, start_time, end_time, submitted_at)
+       VALUES ($1,$2::date,$3,$4,$5,$6,NOW())
+       ON CONFLICT (staff_id, week_start, day)
+       DO UPDATE SET available=EXCLUDED.available, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time, submitted_at=NOW()`,
+      [staffId, weekStart, dayName, available, start, end]
+    );
+  }
+}
+
+// For staff who've turned on "use my standard availability every week," this
+// auto-fills the current open week with their standing template the first
+// time anyone (staff or admin) looks at that week, if they haven't
+// submitted anything for it yet themselves. Only ever touches the single
+// currently-open target week - never past or arbitrary weeks.
+async function applyStandingAvailabilityIfNeeded(client, weekStart) {
+  if (weekStart !== targetWeekStart()) return;
+  const standingRes = await client.query('SELECT staff_id, days FROM standing_availability WHERE enabled=TRUE');
+  for (const row of standingRes.rows) {
+    const existing = await client.query('SELECT 1 FROM availability WHERE staff_id=$1 AND week_start=$2::date LIMIT 1', [row.staff_id, weekStart]);
+    if (existing.rows.length > 0) continue; // staff already submitted their own for this week - don't override
+    await writeAvailabilityRows(client, row.staff_id, weekStart, row.days || {});
+  }
+}
+
 /* ============================= Cookie-based admin session ============================= */
 const IDLE_LIMIT_MS = 15 * 60 * 1000;
 
@@ -199,18 +229,21 @@ module.exports = async function handler(req, res) {
           await ensureAdminPassword(client);
           await ensureSuperAdmin(client);
           const deptRes = await client.query('SELECT name FROM departments ORDER BY id');
-          const locRes = await client.query('SELECT name FROM locations ORDER BY id');
+          const locRes = await client.query('SELECT name, swap_enabled FROM locations ORDER BY id');
           const locationNames = locRes.rows.map(r => r.name);
           const windowStatuses = {};
-          for (const loc of locationNames) {
-            const override = await getWindowOverride(client, loc);
-            windowStatuses[loc] = { open: computeOpenFromOverride(override), override };
+          const swapEnabled = {};
+          for (const row of locRes.rows) {
+            const override = await getWindowOverride(client, row.name);
+            windowStatuses[row.name] = { open: computeOpenFromOverride(override), override };
+            swapEnabled[row.name] = !!row.swap_enabled;
           }
           return res.status(200).json({
             success: true,
             departments: deptRes.rows.map(r => r.name),
             locations: locationNames,
             windowStatuses: windowStatuses,
+            swapEnabled: swapEnabled,
             targetWeekStart: targetWeekStart()
           });
         }
@@ -275,6 +308,19 @@ module.exports = async function handler(req, res) {
           [location, mode]
         );
         return res.status(200).json({ success: true, location, windowOpen: computeOpenFromOverride(mode), windowOverride: mode });
+      }
+
+      case 'set_swap_enabled': {
+        const scope = await requireAdmin(req, res, client);
+        if (!scope) return;
+        const location = (body.location || '').trim();
+        const enabled = !!body.enabled;
+        if (!location) return res.status(200).json({ success: false, error: 'Location required.' });
+        if (scope.role !== 'super_admin' && !scope.locations.includes(location)) {
+          return res.status(200).json({ success: false, error: 'You are not permitted to change this setting for that location.' });
+        }
+        await client.query('UPDATE locations SET swap_enabled=$1 WHERE name=$2', [enabled, location]);
+        return res.status(200).json({ success: true, location, enabled });
       }
 
       case 'get_staff_list': {
@@ -462,6 +508,7 @@ module.exports = async function handler(req, res) {
         if (!scope) return;
         const weekStart = body.weekStart;
         if (!weekStart) return res.status(200).json({ success: false, error: 'weekStart required.' });
+        await applyStandingAvailabilityIfNeeded(client, weekStart);
         let result;
         if (scope.role === 'super_admin') {
           result = await client.query(
@@ -500,6 +547,7 @@ module.exports = async function handler(req, res) {
         const staffId = parseInt(body.staffId, 10) || 0;
         const weekStart = body.weekStart;
         if (!staffId || !weekStart) return res.status(200).json({ success: false, error: 'Missing data.' });
+        await applyStandingAvailabilityIfNeeded(client, weekStart);
         const result = await client.query(
           'SELECT day, available, start_time, end_time FROM availability WHERE staff_id=$1 AND week_start=$2::date',
           [staffId, weekStart]
@@ -525,18 +573,7 @@ module.exports = async function handler(req, res) {
         if (!open) return res.status(200).json({ success: false, error: 'The availability window is closed for your location. It reopens Sunday and closes Thursday night, unless your admin has changed this.' });
         if (weekStart !== targetWeekStart()) return res.status(200).json({ success: false, error: 'This week is no longer open for submissions.' });
 
-        for (const [dayName, d] of Object.entries(days)) {
-          const available = !!(d && d.available);
-          const start = available ? (d.start || null) : null;
-          const end = available ? (d.end || null) : null;
-          await client.query(
-            `INSERT INTO availability (staff_id, week_start, day, available, start_time, end_time, submitted_at)
-             VALUES ($1,$2::date,$3,$4,$5,$6,NOW())
-             ON CONFLICT (staff_id, week_start, day)
-             DO UPDATE SET available=EXCLUDED.available, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time, submitted_at=NOW()`,
-            [staffId, weekStart, dayName, available, start, end]
-          );
-        }
+        await writeAvailabilityRows(client, staffId, weekStart, days);
 
         // Retention: keep only the 2 most recent weeks of availability data.
         const keepRes = await client.query('SELECT DISTINCT week_start::text AS week_start FROM availability ORDER BY week_start DESC LIMIT 2');
@@ -546,6 +583,259 @@ module.exports = async function handler(req, res) {
           await client.query(`DELETE FROM availability WHERE week_start NOT IN (${placeholders})`, keep);
         }
 
+        return res.status(200).json({ success: true });
+      }
+
+      /* ---- Standing (indefinite) availability ---- */
+      case 'get_standing_availability': {
+        const staffId = parseInt(body.staffId, 10) || 0;
+        if (!staffId) return res.status(200).json({ success: false, error: 'Missing data.' });
+        const result = await client.query('SELECT enabled, days FROM standing_availability WHERE staff_id=$1', [staffId]);
+        if (result.rows.length === 0) return res.status(200).json({ success: true, enabled: false, days: {} });
+        return res.status(200).json({ success: true, enabled: result.rows[0].enabled, days: result.rows[0].days || {} });
+      }
+
+      case 'save_standing_availability': {
+        const staffId = parseInt(body.staffId, 10) || 0;
+        const enabled = !!body.enabled;
+        const days = body.days || {};
+        if (!staffId) return res.status(200).json({ success: false, error: 'Missing data.' });
+        await client.query(
+          `INSERT INTO standing_availability (staff_id, enabled, days, updated_at) VALUES ($1,$2,$3,NOW())
+           ON CONFLICT (staff_id) DO UPDATE SET enabled=EXCLUDED.enabled, days=EXCLUDED.days, updated_at=NOW()`,
+          [staffId, enabled, JSON.stringify(days)]
+        );
+        // If just enabled, apply it to the current open week right away rather than waiting for someone to look.
+        if (enabled) { await applyStandingAvailabilityIfNeeded(client, targetWeekStart()); }
+        return res.status(200).json({ success: true });
+      }
+
+      /* ---- Colleague lookup (staff-facing, for picking a swap partner) ---- */
+      case 'list_colleagues': {
+        const staffId = parseInt(body.staffId, 10) || 0;
+        if (!staffId) return res.status(200).json({ success: false, error: 'Missing data.' });
+        const meRes = await client.query('SELECT location FROM staff WHERE id=$1', [staffId]);
+        if (meRes.rows.length === 0) return res.status(200).json({ success: false, error: 'Staff not found.' });
+        const location = meRes.rows[0].location;
+        const result = await client.query('SELECT id, name FROM staff WHERE location=$1 AND id<>$2 ORDER BY name', [location, staffId]);
+        return res.status(200).json({ success: true, colleagues: result.rows });
+      }
+
+      /* ---- Time-off requests ---- */
+      case 'request_time_off': {
+        const staffId = parseInt(body.staffId, 10) || 0;
+        const startDate = body.startDate;
+        const endDate = body.endDate;
+        const reason = (body.reason || '').trim().slice(0, 255);
+        if (!staffId || !startDate || !endDate) return res.status(200).json({ success: false, error: 'Missing data.' });
+        if (new Date(endDate) < new Date(startDate)) return res.status(200).json({ success: false, error: 'End date must be on or after the start date.' });
+        await client.query(
+          'INSERT INTO time_off_requests (staff_id, start_date, end_date, reason) VALUES ($1,$2::date,$3::date,$4)',
+          [staffId, startDate, endDate, reason]
+        );
+        return res.status(200).json({ success: true });
+      }
+
+      case 'get_my_time_off': {
+        const staffId = parseInt(body.staffId, 10) || 0;
+        if (!staffId) return res.status(200).json({ success: false, error: 'Missing data.' });
+        const result = await client.query(
+          `SELECT id, start_date, end_date, reason, status, created_at FROM time_off_requests
+           WHERE staff_id=$1 ORDER BY created_at DESC LIMIT 20`,
+          [staffId]
+        );
+        return res.status(200).json({ success: true, requests: result.rows });
+      }
+
+      case 'list_time_off': {
+        const scope = await requireAdmin(req, res, client);
+        if (!scope) return;
+        let result;
+        if (scope.role === 'super_admin') {
+          result = await client.query(
+            `SELECT t.id, t.staff_id, t.start_date, t.end_date, t.reason, t.status, t.created_at, s.name, s.location
+             FROM time_off_requests t JOIN staff s ON s.id = t.staff_id
+             ORDER BY t.status='pending' DESC, t.created_at DESC LIMIT 200`
+          );
+        } else {
+          result = await client.query(
+            `SELECT t.id, t.staff_id, t.start_date, t.end_date, t.reason, t.status, t.created_at, s.name, s.location
+             FROM time_off_requests t JOIN staff s ON s.id = t.staff_id
+             WHERE s.location = ANY($1)
+             ORDER BY t.status='pending' DESC, t.created_at DESC LIMIT 200`,
+            [scope.locations]
+          );
+        }
+        return res.status(200).json({ success: true, requests: result.rows });
+      }
+
+      case 'resolve_time_off': {
+        const scope = await requireAdmin(req, res, client);
+        if (!scope) return;
+        const id = parseInt(body.id, 10) || 0;
+        const status = body.status === 'approved' ? 'approved' : (body.status === 'denied' ? 'denied' : null);
+        if (!id || !status) return res.status(200).json({ success: false, error: 'Missing data.' });
+
+        const reqRes = await client.query(
+          `SELECT t.staff_id, t.start_date::text AS start_date, t.end_date::text AS end_date, s.location
+           FROM time_off_requests t JOIN staff s ON s.id = t.staff_id WHERE t.id=$1`,
+          [id]
+        );
+        if (reqRes.rows.length === 0) return res.status(200).json({ success: false, error: 'Request not found.' });
+        const reqRow = reqRes.rows[0];
+        if (scope.role !== 'super_admin' && !scope.locations.includes(reqRow.location)) {
+          return res.status(200).json({ success: false, error: 'You are not permitted to resolve requests for that location.' });
+        }
+
+        await client.query('UPDATE time_off_requests SET status=$1, resolved_at=NOW(), resolved_by=$2 WHERE id=$3', [status, scope.adminId, id]);
+
+        // On approval, mark any overlapping days in the currently-retained
+        // weeks (this week / next week) as unavailable automatically.
+        if (status === 'approved') {
+          const weeksToCheck = Array.from(new Set([currentWeekMonday(), targetWeekStart()]));
+          const start = new Date(reqRow.start_date);
+          const end = new Date(reqRow.end_date);
+          for (const wk of weeksToCheck) {
+            const wkDate = new Date(wk + 'T00:00:00');
+            for (let i = 0; i < 7; i++) {
+              const d = addDays(wkDate, i);
+              if (d >= start && d <= end) {
+                await client.query(
+                  `INSERT INTO availability (staff_id, week_start, day, available, start_time, end_time, submitted_at)
+                   VALUES ($1,$2::date,$3,FALSE,NULL,NULL,NOW())
+                   ON CONFLICT (staff_id, week_start, day)
+                   DO UPDATE SET available=FALSE, start_time=NULL, end_time=NULL, submitted_at=NOW()`,
+                  [reqRow.staff_id, wk, DAY_NAMES[i]]
+                );
+              }
+            }
+          }
+        }
+        return res.status(200).json({ success: true });
+      }
+
+      /* ---- Shift swap requests ---- */
+      case 'request_shift_swap': {
+        const staffId = parseInt(body.staffId, 10) || 0;
+        const weekStart = body.weekStart;
+        const day = body.day;
+        const targetStaffId = body.targetStaffId ? parseInt(body.targetStaffId, 10) : null;
+        const note = (body.note || '').trim().slice(0, 255);
+        if (!staffId || !weekStart || !day || !DAY_NAMES.includes(day)) return res.status(200).json({ success: false, error: 'Missing data.' });
+
+        const staffLocRes = await client.query('SELECT location FROM staff WHERE id=$1', [staffId]);
+        if (staffLocRes.rows.length === 0) return res.status(200).json({ success: false, error: 'Staff record not found.' });
+        const swapCheck = await client.query('SELECT swap_enabled FROM locations WHERE name=$1', [staffLocRes.rows[0].location]);
+        if (swapCheck.rows.length === 0 || !swapCheck.rows[0].swap_enabled) {
+          return res.status(200).json({ success: false, error: 'Shift swaps are not enabled for your location right now. Check with your admin.' });
+        }
+
+        const shiftRes = await client.query('SELECT shift_text FROM roster_shifts WHERE staff_id=$1 AND week_start=$2::date AND day=$3', [staffId, weekStart, day]);
+        if (shiftRes.rows.length === 0 || !shiftRes.rows[0].shift_text) {
+          return res.status(200).json({ success: false, error: 'You don\u2019t have a published shift on that day to swap.' });
+        }
+        await client.query(
+          'INSERT INTO shift_swaps (week_start, day, requester_staff_id, target_staff_id, note) VALUES ($1::date,$2,$3,$4,$5)',
+          [weekStart, day, staffId, targetStaffId, note]
+        );
+        return res.status(200).json({ success: true });
+      }
+
+      case 'get_my_shift_swaps': {
+        const staffId = parseInt(body.staffId, 10) || 0;
+        if (!staffId) return res.status(200).json({ success: false, error: 'Missing data.' });
+        const result = await client.query(
+          `SELECT sw.id, sw.week_start::text AS week_start, sw.day, sw.status, sw.note, sw.created_at,
+                  sw.requester_staff_id, req.name AS requester_name,
+                  sw.target_staff_id, tgt.name AS target_name
+           FROM shift_swaps sw
+           JOIN staff req ON req.id = sw.requester_staff_id
+           LEFT JOIN staff tgt ON tgt.id = sw.target_staff_id
+           WHERE sw.requester_staff_id=$1 OR sw.target_staff_id=$1
+           ORDER BY sw.created_at DESC LIMIT 20`,
+          [staffId]
+        );
+        return res.status(200).json({ success: true, swaps: result.rows });
+      }
+
+      case 'list_shift_swaps': {
+        const scope = await requireAdmin(req, res, client);
+        if (!scope) return;
+        let result;
+        if (scope.role === 'super_admin') {
+          result = await client.query(
+            `SELECT sw.id, sw.week_start::text AS week_start, sw.day, sw.status, sw.note, sw.created_at,
+                    req.id AS requester_id, req.name AS requester_name, req.location,
+                    tgt.id AS target_id, tgt.name AS target_name
+             FROM shift_swaps sw
+             JOIN staff req ON req.id = sw.requester_staff_id
+             LEFT JOIN staff tgt ON tgt.id = sw.target_staff_id
+             ORDER BY sw.status='pending' DESC, sw.created_at DESC LIMIT 200`
+          );
+        } else {
+          result = await client.query(
+            `SELECT sw.id, sw.week_start::text AS week_start, sw.day, sw.status, sw.note, sw.created_at,
+                    req.id AS requester_id, req.name AS requester_name, req.location,
+                    tgt.id AS target_id, tgt.name AS target_name
+             FROM shift_swaps sw
+             JOIN staff req ON req.id = sw.requester_staff_id
+             LEFT JOIN staff tgt ON tgt.id = sw.target_staff_id
+             WHERE req.location = ANY($1)
+             ORDER BY sw.status='pending' DESC, sw.created_at DESC LIMIT 200`,
+            [scope.locations]
+          );
+        }
+        return res.status(200).json({ success: true, swaps: result.rows });
+      }
+
+      case 'resolve_shift_swap': {
+        const scope = await requireAdmin(req, res, client);
+        if (!scope) return;
+        const id = parseInt(body.id, 10) || 0;
+        const action = body.action === 'approve' ? 'approve' : (body.action === 'deny' ? 'deny' : null);
+        if (!id || !action) return res.status(200).json({ success: false, error: 'Missing data.' });
+
+        const swRes = await client.query(
+          `SELECT sw.*, req.location AS requester_location FROM shift_swaps sw
+           JOIN staff req ON req.id = sw.requester_staff_id WHERE sw.id=$1`,
+          [id]
+        );
+        if (swRes.rows.length === 0) return res.status(200).json({ success: false, error: 'Request not found.' });
+        const sw = swRes.rows[0];
+        if (scope.role !== 'super_admin' && !scope.locations.includes(sw.requester_location)) {
+          return res.status(200).json({ success: false, error: 'You are not permitted to resolve requests for that location.' });
+        }
+        if (sw.status !== 'pending') return res.status(200).json({ success: false, error: 'This request was already resolved.' });
+
+        if (action === 'approve') {
+          const reqShiftRes = await client.query('SELECT shift_text FROM roster_shifts WHERE staff_id=$1 AND week_start=$2::date AND day=$3', [sw.requester_staff_id, sw.week_start, sw.day]);
+          const requesterShift = reqShiftRes.rows[0] ? reqShiftRes.rows[0].shift_text : '';
+
+          if (sw.target_staff_id) {
+            const tgtShiftRes = await client.query('SELECT shift_text FROM roster_shifts WHERE staff_id=$1 AND week_start=$2::date AND day=$3', [sw.target_staff_id, sw.week_start, sw.day]);
+            const targetShift = tgtShiftRes.rows[0] ? tgtShiftRes.rows[0].shift_text : '';
+            // Swap: requester takes target's shift text (often blank/off) and vice versa.
+            await client.query(
+              `INSERT INTO roster_shifts (staff_id, week_start, day, shift_text) VALUES ($1,$2::date,$3,$4)
+               ON CONFLICT (staff_id, week_start, day) DO UPDATE SET shift_text=EXCLUDED.shift_text`,
+              [sw.requester_staff_id, sw.week_start, sw.day, targetShift]
+            );
+            await client.query(
+              `INSERT INTO roster_shifts (staff_id, week_start, day, shift_text) VALUES ($1,$2::date,$3,$4)
+               ON CONFLICT (staff_id, week_start, day) DO UPDATE SET shift_text=EXCLUDED.shift_text`,
+              [sw.target_staff_id, sw.week_start, sw.day, requesterShift]
+            );
+          } else {
+            // No specific colleague named - just release the requester's shift; admin assigns coverage separately.
+            await client.query(
+              `INSERT INTO roster_shifts (staff_id, week_start, day, shift_text) VALUES ($1,$2::date,$3,'')
+               ON CONFLICT (staff_id, week_start, day) DO UPDATE SET shift_text=''`,
+              [sw.requester_staff_id, sw.week_start, sw.day]
+            );
+          }
+        }
+
+        await client.query('UPDATE shift_swaps SET status=$1, resolved_at=NOW(), resolved_by=$2 WHERE id=$3', [action === 'approve' ? 'approved' : 'denied', scope.adminId, id]);
         return res.status(200).json({ success: true });
       }
 
