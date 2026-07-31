@@ -100,6 +100,7 @@ label { font-size:12.5px; font-weight:600; color:var(--ink-soft); text-transform
 .tag.grocery { background:var(--grocery-soft); color:var(--grocery); }
 .tag.other { background:var(--amber-soft); color:#8a5a10; }
 .tag.location { background:#E7ECF3; color:#33507A; }
+.tag.danger { background:var(--danger-soft); color:var(--danger); }
 
 /* ---- Day grid (staff form) ---- */
 .day-row { border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:10px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
@@ -246,11 +247,13 @@ async function loadCore(){
     S.cache.departments = res.departments;
     S.cache.locations = res.locations;
     S.windowStatuses = res.windowStatuses || {}; // { locationName: { open, override } }
+    S.swapEnabled = res.swapEnabled || {}; // { locationName: true/false }
     S.serverTargetWeek = res.targetWeekStart;
   } catch(e){
     S.cache.departments = ['Liquor','Grocery'];
     S.cache.locations = ['Karabar','Kaleen'];
     S.windowStatuses = {};
+    S.swapEnabled = {};
     S.loadError = e.message;
   }
   S.loading = false;
@@ -404,6 +407,17 @@ async function staffLogin(){
     }
   } catch(e){}
 
+  try {
+    var sres = await apiCall('get_standing_availability', {staffId: match.id});
+    S.standingEnabled = sres.enabled;
+    S.standingDays = sres.days;
+  } catch(e){ S.standingEnabled = false; S.standingDays = {}; }
+
+  try { var tres = await apiCall('get_my_time_off', {staffId: match.id}); S.myTimeOff = tres.requests; } catch(e){ S.myTimeOff = []; }
+  try { var swres = await apiCall('get_my_shift_swaps', {staffId: match.id}); S.mySwaps = swres.swaps; } catch(e){ S.mySwaps = []; }
+  S.colleagues = null; // loaded lazily when a swap is first requested
+  S.swapModal = null;
+
   S.screen = 'staff-form';
   render();
 }
@@ -452,9 +466,17 @@ function renderStaffForm(){
     (!open ? '<div class="banner danger">The availability window is closed'+(statusEntry.override==='closed'?' (closed by admin)':'')+'. It normally reopens Sunday 12:00am and closes Thursday 11:59pm. You can still view what you last submitted below.</div>'
            : '<div class="banner amber">'+(statusEntry.override==='open'?'<strong>Window manually opened by admin.</strong> ':'')+'Store hours are 7:30am \u2013 9:00pm. Set your availability for the week of <strong>'+fmtDateShort(wk)+'</strong>. Submissions lock after Thursday'+(statusEntry.override==='open'?' unless admin closes this early':'')+'.</div>') +
     '<div class="card">' + rows + '</div>' +
-    (open ? '<div class="btn-row"><button class="btn amber" onclick="submitAvailability()">Save Availability</button></div>' : '') +
+    (open ? (
+      '<div class="card-tight" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">' +
+        '<input type="checkbox" id="standingCheckbox" '+(S.standingEnabled?'checked':'')+' style="width:auto;" />' +
+        '<label for="standingCheckbox" style="font-size:13.5px;color:var(--ink);text-transform:none;font-weight:500;">Use this as my standard availability every week (auto-fills future weeks until I change it)</label>' +
+      '</div>' +
+      '<div class="btn-row"><button class="btn amber" onclick="submitAvailability()">Save Availability</button></div>'
+    ) : '') +
     (S.savedMsg ? '<div class="banner grocery">'+S.savedMsg+'</div>' : '') +
     (S.error ? '<div class="banner danger">'+S.error+'</div>' : '') +
+    renderTimeOffCard() +
+    renderMySwapsCard() +
   '</div>';
 }
 
@@ -464,10 +486,16 @@ function renderMyShiftsCard(entry, label){
   var rows = dayNames().map(function(dn, idx){
     var text = entry.days[dn];
     var dateLabel = fmtDateShort(addDays(wk, idx));
+    var isOpen = S.swapModal && S.swapModal.weekStart===entry.weekStart && S.swapModal.day===dn;
+    var canSwap = text && S.swapEnabled && S.swapEnabled[S.staff.location];
+    var swapLink = canSwap ? ('<button class="link-btn" style="margin-left:14px;" onclick="'+(isOpen?'closeSwapRequest()':'openSwapRequest(\''+entry.weekStart+'\',\''+dn+'\')')+'">'+(isOpen?'Cancel':'Request Swap')+'</button>') : '';
     return '' +
-    '<div class="day-row" style="padding:10px 16px;">' +
-      '<div class="day-name" style="font-size:15px;">'+dn+'<span class="day-date">'+dateLabel+'</span></div>' +
-      '<div style="flex:1;text-align:right;">'+(text ? '<strong>'+text+'</strong>' : '<span class="muted">Off</span>')+'</div>' +
+    '<div class="day-row" style="padding:10px 16px;flex-direction:column;align-items:stretch;gap:0;">' +
+      '<div style="display:flex;align-items:center;">' +
+        '<div class="day-name" style="font-size:15px;">'+dn+'<span class="day-date">'+dateLabel+'</span></div>' +
+        '<div style="flex:1;text-align:right;">'+(text ? '<strong>'+text+'</strong>' : '<span class="muted">Off</span>')+swapLink+'</div>' +
+      '</div>' +
+      (isOpen ? renderSwapForm(entry.weekStart, dn) : '') +
     '</div>';
   }).join('');
   return '' +
@@ -475,6 +503,100 @@ function renderMyShiftsCard(entry, label){
     '<h3 style="margin:0 0 10px;">'+label+'\u2019s Shifts <span class="muted small" style="text-transform:none;font-weight:500;">(Week of '+fmtDateShort(wk)+')</span></h3>' +
     rows +
   '</div>';
+}
+
+function renderSwapForm(weekStart, day){
+  var options = (S.colleagues||[]).map(function(c){ return '<option value="'+c.id+'">'+c.name+'</option>'; }).join('');
+  return '' +
+  '<div style="margin-top:10px;padding:14px;background:var(--bg);border-radius:8px;">' +
+    '<div style="display:grid;grid-template-columns:1.4fr 2fr auto;gap:10px;align-items:end;">' +
+      '<div class="field" style="margin-bottom:0;"><label>Swap With (optional)</label><select id="swapTargetSelect"><option value="">Anyone \u2014 admin will arrange</option>'+options+'</select></div>' +
+      '<div class="field" style="margin-bottom:0;"><label>Note (optional)</label><input type="text" id="swapNoteInput" placeholder="e.g. Doctor appointment" /></div>' +
+      '<button class="btn amber" onclick="submitSwapRequest(\''+weekStart+'\',\''+day+'\')">Submit Request</button>' +
+    '</div>' +
+    (S.swapMsg ? '<div class="banner grocery" style="margin-top:10px;">'+S.swapMsg+'</div>' : '') +
+    (S.swapErr ? '<div class="banner danger" style="margin-top:10px;">'+S.swapErr+'</div>' : '') +
+  '</div>';
+}
+
+async function openSwapRequest(weekStart, day){
+  S.swapModal = { weekStart: weekStart, day: day };
+  S.swapMsg = ''; S.swapErr = '';
+  render();
+  if(!S.colleagues){
+    try { var res = await apiCall('list_colleagues', {staffId: S.staff.id}); S.colleagues = res.colleagues; render(); }
+    catch(e){ S.colleagues = []; }
+  }
+}
+function closeSwapRequest(){ S.swapModal = null; render(); }
+
+async function submitSwapRequest(weekStart, day){
+  var targetSel = document.getElementById('swapTargetSelect');
+  var noteInput = document.getElementById('swapNoteInput');
+  var targetStaffId = targetSel && targetSel.value ? targetSel.value : null;
+  var note = noteInput ? noteInput.value : '';
+  try {
+    await apiCall('request_shift_swap', { staffId: S.staff.id, weekStart: weekStart, day: day, targetStaffId: targetStaffId, note: note });
+    S.swapMsg = 'Swap request sent \u2014 your admin will review it.';
+    S.swapErr = '';
+    try { var sw = await apiCall('get_my_shift_swaps', {staffId: S.staff.id}); S.mySwaps = sw.swaps; } catch(e){}
+    render();
+    setTimeout(function(){ S.swapModal=null; S.swapMsg=''; render(); }, 2000);
+  } catch(e){ S.swapErr = e.message; render(); }
+}
+
+function renderMySwapsCard(){
+  if(!S.mySwaps || S.mySwaps.length===0) return '';
+  var rows = S.mySwaps.map(function(sw){
+    var isMine = String(sw.requester_staff_id) === String(S.staff.id);
+    var desc = isMine
+      ? ('You \u2192 ' + (sw.target_name || 'anyone') + ' \u2014 ' + sw.day + ', week of ' + fmtDateShort(new Date(sw.week_start+'T00:00:00')))
+      : (sw.requester_name + ' \u2192 you \u2014 ' + sw.day + ', week of ' + fmtDateShort(new Date(sw.week_start+'T00:00:00')));
+    var badge = sw.status==='approved' ? '<span class="tag grocery">Approved</span>' : (sw.status==='denied' ? '<span class="tag danger">Denied</span>' : '<span class="tag other">Pending</span>');
+    return '<div class="day-row" style="padding:10px 16px;"><div style="flex:1;">'+desc+(sw.note?' <span class="muted small">\u2014 '+sw.note+'</span>':'')+'</div>'+badge+'</div>';
+  }).join('');
+  return '<div class="card"><h3 style="margin:0 0 10px;">My Swap Requests</h3>'+rows+'</div>';
+}
+
+function renderTimeOffCard(){
+  var rows = (S.myTimeOff||[]).map(function(r){
+    var badge = r.status==='approved' ? '<span class="tag grocery">Approved</span>' : (r.status==='denied' ? '<span class="tag danger">Denied</span>' : '<span class="tag other">Pending</span>');
+    return '' +
+    '<div class="day-row" style="padding:10px 16px;">' +
+      '<div style="flex:1;">' + fmtDateShort(new Date(r.start_date+'T00:00:00')) + ' \u2013 ' + fmtDateShort(new Date(r.end_date+'T00:00:00')) + (r.reason ? ' <span class="muted small">('+r.reason+')</span>' : '') + '</div>' +
+      badge +
+    '</div>';
+  }).join('');
+  return '' +
+  '<div class="card">' +
+    '<h3 style="margin:0 0 10px;">Request Time Off</h3>' +
+    '<div class="muted small" style="margin-bottom:12px;">Separate from your weekly availability \u2014 use this for specific dates off (holidays, appointments, etc), any time of year.</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1.4fr auto;gap:10px;align-items:end;">' +
+      '<div class="field" style="margin-bottom:0;"><label>Start Date</label><input type="date" id="timeOffStart" /></div>' +
+      '<div class="field" style="margin-bottom:0;"><label>End Date</label><input type="date" id="timeOffEnd" /></div>' +
+      '<div class="field" style="margin-bottom:0;"><label>Reason (optional)</label><input type="text" id="timeOffReason" placeholder="e.g. Family trip" /></div>' +
+      '<button class="btn secondary" style="height:41px;" onclick="submitTimeOffRequest()">Request</button>' +
+    '</div>' +
+    (S.timeOffMsg ? '<div class="banner grocery" style="margin-top:12px;">'+S.timeOffMsg+'</div>' : '') +
+    (S.timeOffErr ? '<div class="banner danger" style="margin-top:12px;">'+S.timeOffErr+'</div>' : '') +
+    (rows ? '<div style="margin-top:16px;">'+rows+'</div>' : '<div class="muted small" style="margin-top:12px;">No requests yet.</div>') +
+  '</div>';
+}
+
+async function submitTimeOffRequest(){
+  var start = document.getElementById('timeOffStart').value;
+  var end = document.getElementById('timeOffEnd').value;
+  var reason = document.getElementById('timeOffReason').value;
+  if(!start || !end){ alert('Pick a start and end date.'); return; }
+  try {
+    await apiCall('request_time_off', { staffId: S.staff.id, startDate: start, endDate: end, reason: reason });
+    S.timeOffMsg = 'Request sent.';
+    S.timeOffErr = '';
+    var tres = await apiCall('get_my_time_off', {staffId: S.staff.id});
+    S.myTimeOff = tres.requests;
+    render();
+    setTimeout(function(){ S.timeOffMsg=''; render(); }, 3000);
+  } catch(e){ S.timeOffErr = e.message; render(); }
 }
 
 function renderTimeOptions(selected){
@@ -493,9 +615,12 @@ function setDayTime(dn, field, val){
 
 async function submitAvailability(){
   var iso = isoDate(targetWeekStart());
+  var standingBox = document.getElementById('standingCheckbox');
+  var wantStanding = standingBox ? standingBox.checked : S.standingEnabled;
   try {
     await apiCall('set_availability', { staffId: S.staff.id, weekStart: iso, days: S.draft });
-    S.savedMsg = 'Saved. You can update this any time before the window closes Thursday.';
+    try { await apiCall('save_standing_availability', { staffId: S.staff.id, enabled: wantStanding, days: S.draft }); S.standingEnabled = wantStanding; } catch(e){}
+    S.savedMsg = wantStanding ? 'Saved \u2014 and set as your standard weekly availability.' : 'Saved. You can update this any time before the window closes Thursday.';
     S.error = '';
   } catch(e){
     S.error = e.message; // e.g. deadline just passed server-side
@@ -563,8 +688,8 @@ function isSuperAdmin(){ return S.adminRole === 'super_admin'; }
 
 /* ============================= ADMIN DASHBOARD ============================= */
 function renderAdmin(){
-  var tabs = ['availability','roster','staff'];
-  var labels = {availability:'Availability', roster:'Roster', staff:'Staff', departments:'Departments', locations:'Locations', admins:'Admins', settings:'Settings'};
+  var tabs = ['availability','roster','requests','staff'];
+  var labels = {availability:'Availability', roster:'Roster', requests:'Requests', staff:'Staff', departments:'Departments', locations:'Locations', admins:'Admins', settings:'Settings'};
   if(isSuperAdmin()){ tabs.push('departments','locations','admins'); }
   tabs.push('settings');
   var tabsHtml = tabs.map(function(t){
@@ -574,6 +699,7 @@ function renderAdmin(){
   var body = '';
   if(S.adminTab==='availability') body = renderAdminAvailability();
   else if(S.adminTab==='roster') body = renderAdminRoster();
+  else if(S.adminTab==='requests') body = renderAdminRequests();
   else if(S.adminTab==='staff') body = renderAdminStaff();
   else if(S.adminTab==='departments' && isSuperAdmin()) body = renderAdminDepartments();
   else if(S.adminTab==='locations' && isSuperAdmin()) body = renderAdminLocations();
@@ -598,6 +724,7 @@ function setAdminTab(t){
   else if(t==='availability'){ loadAdminWeekIfNeeded(); }
   else if(t==='roster'){ loadRosterTab(); }
   else if(t==='admins'){ loadAdminsTab(); }
+  else if(t==='requests'){ loadRequestsTab(); }
 }
 function logoutAdmin(){ apiCall('admin_logout', {}).catch(function(){}); S.screen='landing'; S.error=''; S.adminRole=null; S.adminLocations=null; S.adminUsername=null; clearIdleTimer(); render(); }
 
@@ -970,6 +1097,64 @@ async function unpublishRoster(){
   } catch(e){ alert(e.message); }
 }
 
+/* ---- Requests tab (Time Off + Shift Swaps) ---- */
+function loadRequestsTab(){
+  S.requestsLoading = true; S.requestsLoadError = ''; render();
+  Promise.all([apiCall('list_time_off', {}), apiCall('list_shift_swaps', {})]).then(function(results){
+    S.timeOffList = results[0].requests;
+    S.swapList = results[1].swaps;
+    S.requestsLoading = false;
+    render();
+  }).catch(function(e){
+    S.requestsLoading = false;
+    S.requestsLoadError = e.message;
+    render();
+  });
+}
+
+function renderAdminRequests(){
+  if(S.requestsLoading){ return '<div class="card empty">Loading requests…</div>'; }
+  if(S.requestsLoadError){ return '<div class="card"><div class="banner danger">'+S.requestsLoadError+'</div><button class="btn secondary" onclick="loadRequestsTab()">Try Again</button></div>'; }
+
+  var timeOff = S.timeOffList || [];
+  var swaps = S.swapList || [];
+
+  var timeOffRows = timeOff.map(function(r){
+    var badge = r.status==='approved' ? '<span class="tag grocery">Approved</span>' : (r.status==='denied' ? '<span class="tag danger">Denied</span>' : '<span class="tag other">Pending</span>');
+    var dateRange = fmtDateShort(new Date(r.start_date+'T00:00:00')) + ' \u2013 ' + fmtDateShort(new Date(r.end_date+'T00:00:00'));
+    var actions = r.status==='pending' ? ('<button class="icon-btn" onclick="resolveTimeOff(\''+r.id+'\',\'approved\')">Approve</button> <button class="icon-btn" onclick="resolveTimeOff(\''+r.id+'\',\'denied\')">Deny</button>') : '';
+    return '<tr><td>'+r.name+'</td><td>'+renderLocationTag(r.location)+'</td><td>'+dateRange+'</td><td>'+(r.reason||'<span class="muted">\u2014</span>')+'</td><td>'+badge+'</td><td>'+actions+'</td></tr>';
+  }).join('');
+  if(timeOff.length===0) timeOffRows = '<tr><td colspan="6" class="empty">No time-off requests.</td></tr>';
+
+  var swapRows = swaps.map(function(sw){
+    var badge = sw.status==='approved' ? '<span class="tag grocery">Approved</span>' : (sw.status==='denied' ? '<span class="tag danger">Denied</span>' : '<span class="tag other">Pending</span>');
+    var weekLabel = fmtDateShort(new Date(sw.week_start+'T00:00:00'));
+    var actions = sw.status==='pending' ? ('<button class="icon-btn" onclick="resolveSwap(\''+sw.id+'\',\'approve\')">Approve</button> <button class="icon-btn" onclick="resolveSwap(\''+sw.id+'\',\'deny\')">Deny</button>') : '';
+    return '<tr><td>'+sw.requester_name+'</td><td>'+renderLocationTag(sw.location)+'</td><td>'+sw.day+', wk of '+weekLabel+'</td><td>'+(sw.target_name || '<span class="muted">Anyone</span>')+'</td><td>'+(sw.note||'<span class="muted">\u2014</span>')+'</td><td>'+badge+'</td><td>'+actions+'</td></tr>';
+  }).join('');
+  if(swaps.length===0) swapRows = '<tr><td colspan="7" class="empty">No shift swap requests.</td></tr>';
+
+  return '' +
+  '<div class="top-row"><h3 style="margin:0;">Time Off Requests</h3><button class="btn secondary" onclick="loadRequestsTab()">Reload</button></div>' +
+  '<div class="card" style="overflow-x:auto;margin-bottom:24px;">' +
+    '<table><thead><tr><th>Name</th><th>Location</th><th>Dates</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>'+timeOffRows+'</tbody></table>' +
+  '</div>' +
+  '<h3 style="margin:0 0 12px;">Shift Swap Requests</h3>' +
+  '<div class="card" style="overflow-x:auto;">' +
+    '<table><thead><tr><th>Requested By</th><th>Location</th><th>Shift</th><th>Swap With</th><th>Note</th><th>Status</th><th></th></tr></thead><tbody>'+swapRows+'</tbody></table>' +
+  '</div>';
+}
+
+async function resolveTimeOff(id, status){
+  try { await apiCall('resolve_time_off', {id: id, status: status}); loadRequestsTab(); }
+  catch(e){ alert(e.message); }
+}
+async function resolveSwap(id, action){
+  try { await apiCall('resolve_shift_swap', {id: id, action: action}); loadRequestsTab(); }
+  catch(e){ alert(e.message); }
+}
+
 /* ---- Staff tab ---- */
 function renderAdminStaff(){
   if(S.staffLoading){
@@ -1243,6 +1428,7 @@ function renderAdminSettings(){
       '</label>';
     }).join('');
     var isDirty = pending !== override;
+    var swapOn = !!(S.swapEnabled && S.swapEnabled[loc]);
 
     return '' +
     '<div class="card" style="max-width:480px;">' +
@@ -1255,6 +1441,15 @@ function renderAdminSettings(){
       '<div class="btn-row" style="margin-top:14px;">' +
         '<button class="btn amber" '+(isDirty?'':'disabled')+' onclick="saveWindowOverride(\''+loc+'\')">Save</button>' +
         (isDirty ? '<button class="btn secondary" onclick="setPendingWindowMode(\''+loc+'\',\''+override+'\')">Cancel</button>' : '') +
+      '</div>' +
+      '<div style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px;">' +
+        '<div class="top-row" style="margin-bottom:0;">' +
+          '<div>' +
+            '<strong style="font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:0.03em;font-size:15px;">Shift Swaps</strong><br>' +
+            '<span class="muted small">Off by default. When on, staff here can request to swap a published shift.</span>' +
+          '</div>' +
+          '<button class="btn '+(swapOn?'secondary':'amber')+'" onclick="toggleSwapEnabled(\''+loc+'\','+(!swapOn)+')">'+(swapOn?'Disable':'Enable')+'</button>' +
+        '</div>' +
       '</div>' +
     '</div>';
   }).join('');
@@ -1279,6 +1474,17 @@ async function saveWindowOverride(loc){
     S.windowStatuses[loc] = { open: res.windowOpen, override: res.windowOverride };
     if(S.pendingWindowModeByLoc) delete S.pendingWindowModeByLoc[loc];
     S.windowMsg = mode==='auto' ? 'Switched back to the automatic Sun\u2013Thu schedule.' : ('Window manually set to ' + (mode==='open'?'OPEN':'CLOSED') + '.');
+    S.windowMsgLoc = loc;
+    render();
+    setTimeout(function(){ S.windowMsg=''; S.windowMsgLoc=''; render(); }, 3000);
+  } catch(e){ alert(e.message); }
+}
+async function toggleSwapEnabled(loc, enable){
+  try {
+    await apiCall('set_swap_enabled', {location: loc, enabled: enable});
+    if(!S.swapEnabled) S.swapEnabled = {};
+    S.swapEnabled[loc] = enable;
+    S.windowMsg = 'Shift swaps ' + (enable ? 'enabled' : 'disabled') + ' for ' + loc + '.';
     S.windowMsgLoc = loc;
     render();
     setTimeout(function(){ S.windowMsg=''; S.windowMsgLoc=''; render(); }, 3000);
@@ -1360,6 +1566,14 @@ window.removeAdmin = removeAdmin;
 window.openEditAdminLocations = openEditAdminLocations;
 window.promptResetAdminPw = promptResetAdminPw;
 window.loadAdminsTab = loadAdminsTab;
+window.openSwapRequest = openSwapRequest;
+window.closeSwapRequest = closeSwapRequest;
+window.submitSwapRequest = submitSwapRequest;
+window.submitTimeOffRequest = submitTimeOffRequest;
+window.loadRequestsTab = loadRequestsTab;
+window.resolveTimeOff = resolveTimeOff;
+window.resolveSwap = resolveSwap;
+window.toggleSwapEnabled = toggleSwapEnabled;
 
 /* ============================= INIT ============================= */
 loadCore().then(render);
